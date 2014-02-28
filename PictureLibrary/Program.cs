@@ -10,6 +10,12 @@ namespace PictureLibrary
     {
         static void Main(string[] args)
         {
+
+        }
+
+        static void ProcessFile(string fullPath)
+        {
+            
         }
     }
 }
