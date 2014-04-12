@@ -24,6 +24,16 @@ namespace PictureLibrary
                 ProcessImage(fullPath);
         }
 
+        private static void ProcessImage(string fullPath)
+        {
+            throw new NotImplementedException();
+        }
+
+        private static void ProcessVideo(string fullPath)
+        {
+            throw new NotImplementedException();
+        }
+
         private static bool IsVideoThumbnail(string fullPath)
         {
             throw new NotImplementedException();
