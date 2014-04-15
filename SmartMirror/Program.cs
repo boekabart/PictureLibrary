@@ -1,4 +1,6 @@
-﻿using System.IO;
+﻿using System.Globalization;
+using System.IO;
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Text;
 using System.Threading.Tasks;
@@ -11,6 +13,13 @@ namespace SmartMirror
 {
     static class IoHelpers
     {
+        public static IEnumerable<string> EnumerateFilesIfDirExists(string destDir, string searchPattern = "*.*", SearchOption searchOption = SearchOption.TopDirectoryOnly)
+        {
+            return Directory.Exists(destDir)
+                ? Directory.EnumerateFiles(destDir, searchPattern, searchOption)
+                : new string[0];
+        }
+
         public static IEnumerable<string> EnumerateFiles(this string path,
                                string[] searchPatterns,
                                SearchOption searchOption = SearchOption.TopDirectoryOnly)
@@ -62,43 +71,97 @@ namespace SmartMirror
             var starValue = parsedIni.TryGetSetting(sec, "star");
             return starValue != null && starValue.Equals("yes", StringComparison.InvariantCultureIgnoreCase);
         }
+
+        public static IObservable<string> ToObservableSimple(this FileSystemWatcher src)
+        {
+            var sources = new[] 
+                    { 
+                        Observable.FromEvent<FileSystemEventHandler, FileSystemEventArgs>( handler => (sender, e) => handler(e), eh => src.Deleted += eh,  eh => src.Deleted -= eh ),
+                        Observable.FromEvent<FileSystemEventHandler, FileSystemEventArgs>( handler => (sender, e) => handler(e), eh => src.Created += eh,  eh => src.Created -= eh ),
+                        Observable.FromEvent<FileSystemEventHandler, FileSystemEventArgs>( handler => (sender, e) => handler(e), eh => src.Changed += eh,  eh => src.Changed -= eh ),
+                    };
+            return sources.Merge().Select(ev => ev.FullPath);
+        }
+
+        public static IObservable<string> ObserveFileSystem( this string srcDir, string filter)
+        {
+            return Observable.Create<string>(
+                subscriber =>
+                {
+                    var fsm = new FileSystemWatcher
+                    {
+                        Filter = filter,
+                        Path = srcDir,
+                        IncludeSubdirectories = true
+                    };
+                    fsm.ToObservableSimple().Subscribe(subscriber);
+                    fsm.EnableRaisingEvents = true;
+                    return fsm;
+                });
+        }
+
+        public static IObservable<T> ThrottlePerValue<T>(this IObservable<T> src, TimeSpan throttleValue)
+        {
+            return src.GroupBy(_ => _).SelectMany(gr => gr.Throttle(throttleValue));
+        }
+
+        public static IObservable<T> Prefix<T>(this IObservable<T> src, T firstValue)
+        {
+            return new[] {firstValue}.ToObservable().Concat(src);
+        }
     }
 
     class Program
     {
-        static void Main(string[] args)
+        private static void Main(string[] args)
         {
             var srcDir = @"D:\Fotos\";
-
             var videoDestDir = @"D:\FotoMirrors\Videos\";
-            MirrorVideos(srcDir, videoDestDir);
-
             var starredDestDir = @"D:\FotoMirrors\Starred\";
-            MirrorStarred(srcDir, starredDestDir);
 
-            var fsm = new FileSystemWatcher();
-            fsm.Filter = ".picasa.ini";
-            fsm.Path = srcDir;
-            fsm.IncludeSubdirectories = true;
+            var videoObservable = srcDir.ObserveFileSystem("*.M4V")
+                .Select(Path.GetDirectoryName)
+                .ThrottlePerValue(TimeSpan.FromSeconds(5)).Prefix(srcDir);
+
+            var starObservable = srcDir.ObserveFileSystem(".picasa.ini")
+                .Select(Path.GetDirectoryName)
+                .ThrottlePerValue(TimeSpan.FromSeconds(5)).Prefix(srcDir);
+
+            using (
+                videoObservable.Subscribe(
+                    pad => UpdateMirror(CollectVideoCandidates, pad, pad.Replace(srcDir, videoDestDir))))
+            using (
+                starObservable.Subscribe(
+                    pad => UpdateMirror(CollectStarredCandidates, pad, pad.Replace(srcDir, starredDestDir))))
+            {
+                while (!Console.KeyAvailable)
+                    Thread.Sleep(100);
+            }
         }
 
-        private static void MirrorVideos(string srcDir, string destDir)
+        private static IEnumerable<string> CollectVideoCandidates(string dir)
         {
-            Console.WriteLine("Mirroring Videos from {0} to {1}", srcDir, destDir);
-            var mp4Paths = srcDir.EnumerateFiles(new[] {@"*.M4V"}, SearchOption.AllDirectories);
-            var mp4PathsWithThms = mp4Paths.WithThumbnails();
-            UpdateMirror(mp4PathsWithThms, srcDir, destDir);
+            return dir.EnumerateFiles(new[] {@"*.M4V"}, SearchOption.AllDirectories).WithThumbnails();
         }
 
-        private static void MirrorStarred(string srcDir, string destDir)
+        private static IEnumerable<string> CollectStarredCandidates(string dir)
         {
-            Console.WriteLine("Mirroring Starred Files from {0} to {1}", srcDir, destDir);
-            var starredPaths = srcDir.GetStarredFiles();
-            UpdateMirror(starredPaths, srcDir, destDir);
+            return dir.GetStarredFiles();
+        }
+
+        private static void UpdateMirror(Func<string, IEnumerable<string>> srcToIncludeListFunc, string srcDir,
+            string destDir)
+        {
+            UpdateMirror(srcToIncludeListFunc(srcDir), srcDir, destDir);
         }
 
         private static void UpdateMirror(IEnumerable<string> mp4PathsWithThms, string srcDir, string destDir)
         {
+            if (!srcDir.EndsWith(Path.DirectorySeparatorChar.ToString(CultureInfo.InvariantCulture)))
+                srcDir += Path.DirectorySeparatorChar;
+            if (!destDir.EndsWith(Path.DirectorySeparatorChar.ToString(CultureInfo.InvariantCulture)))
+                destDir += Path.DirectorySeparatorChar;
+
             var relativePaths = mp4PathsWithThms.Select(path => path.Substring(srcDir.Length));
             var existingRelativePaths = new HashSet<string>();
             foreach (var relPath in relativePaths)
@@ -109,7 +172,8 @@ namespace SmartMirror
                 HardlinkIfNotExists(srcPath, dstPath);
             }
 
-            var existingFilesInTarget = Directory.EnumerateFiles(destDir, "*.*", SearchOption.AllDirectories);
+            var existingFilesInTarget = IoHelpers.EnumerateFilesIfDirExists(destDir, "*.*", SearchOption.AllDirectories);
+
             var relativeLowerCaseExistinFilesInTarget =
                 existingFilesInTarget.Select(path => path.Substring(destDir.Length).ToLowerInvariant());
             var surplusRelativeFiles =
@@ -122,8 +186,8 @@ namespace SmartMirror
             }
             foreach (var dir in Directory.EnumerateDirectories(destDir, "*.*", SearchOption.AllDirectories))
             {
-                if (dir.TryDeleteDirectory())
-                    Console.WriteLine("Deleted directory {0}");
+                if (dir.TryDeleteDirectoryAndParents())
+                    Console.WriteLine("Deleted directory {0}", dir);
             }
         }
 

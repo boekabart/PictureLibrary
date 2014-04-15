@@ -264,6 +264,14 @@ namespace SmartMirror
             SystemIOFileHelpers.Persist(() => DeleteDirectoryFull(directory));
         }
 
+        public static bool TryDeleteDirectoryAndParents(this string dir)
+        {
+            if (!TryDeleteDirectory(dir))
+                return false;
+            TryDeleteDirectoryAndParents(Path.GetDirectoryName(dir));
+            return true;
+        }
+
         public static bool TryDeleteDirectory(this string dir)
         {
             try
