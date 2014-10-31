@@ -6,16 +6,16 @@ using System.Linq;
 
 namespace SmartMirror
 {
-    public class IniParser
+    public class ParsedIni
     {
         private Dictionary<string, Dictionary<string, string>> contents = new Dictionary<string, Dictionary<string, string>>(); 
         private String iniFilePath;
 
         /// <summary>
-        /// Opens the INI file at the given path and enumerates the values in the IniParser.
+        /// Opens the INI file at the given path and enumerates the values in the ParsedIni.
         /// </summary>
         /// <param name="iniPath">Full path to INI file.</param>
-        public IniParser(String iniPath)
+        public ParsedIni(String iniPath)
         {
             iniFilePath = iniPath;
 
@@ -78,7 +78,12 @@ namespace SmartMirror
         /// <param name="sectionName">Section to enum.</param>
         public IEnumerable<string> EnumSection(String sectionName)
         {
-            return contents[sectionName].Keys;
+            return !contents.ContainsKey(sectionName) ? new string[0] : contents[sectionName].Keys.AsEnumerable();
+        }
+
+        public IEnumerable<KeyValuePair<string,string>> EnumSectionPairs(String sectionName)
+        {
+            return !contents.ContainsKey(sectionName) ? new KeyValuePair<string,string>[0] : contents[sectionName].AsEnumerable();
         }
 
         /// <summary>

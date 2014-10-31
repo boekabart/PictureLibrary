@@ -11,183 +11,191 @@ using System.Threading;
 
 namespace SmartMirror
 {
-    static class IoHelpers
-    {
-        public static IEnumerable<string> EnumerateFilesIfDirExists(string destDir, string searchPattern = "*.*", SearchOption searchOption = SearchOption.TopDirectoryOnly)
-        {
-            return Directory.Exists(destDir)
-                ? Directory.EnumerateFiles(destDir, searchPattern, searchOption)
-                : new string[0];
-        }
-
-        public static IEnumerable<string> EnumerateFiles(this string path,
-                               string[] searchPatterns,
-                               SearchOption searchOption = SearchOption.TopDirectoryOnly)
-        {
-            return searchPatterns.AsParallel()
-                   .SelectMany(searchPattern =>
-                          Directory.EnumerateFiles(path, searchPattern, searchOption));
-        }
-
-        public static IEnumerable<string> WithThumbnails(this IEnumerable<string> paths)
-        {
-            return paths.SelectMany(fn => fn.WithCompanions(new[] {@".THM"}));
-        }
-
-        public static IEnumerable<string> WithCompanions(this string path, string[] companionExtensions)
-        {
-            return
-                new[] {path}.Concat(companionExtensions.Select(ext => Path.ChangeExtension(path, ext))
-                    .Where(File.Exists));
-        }
-
-        public static IEnumerable<string> GetStarredFiles(this string dir)
-        {
-            var picasaInis = Directory.EnumerateFiles(dir, @".picasa.ini", SearchOption.AllDirectories);
-            return picasaInis.SelectMany(StarredFromPicasaIni);
-        }
-
-        private static IEnumerable<string> StarredFromPicasaIni(this string picasaIniPath)
-        {
-            var dir = Path.GetDirectoryName(picasaIniPath);
-            try
-            {
-                var parsedIni = new IniParser(picasaIniPath);
-                var filesInIni = parsedIni.EnumSections();
-                var starredFiles = filesInIni.Where(sec => IsStarred(sec, parsedIni));
-                var fullPahts = starredFiles.Select(fn => Path.Combine(dir, fn));
-                var existingStarredFiles = fullPahts.Where(File.Exists).ToArray();
-                return !existingStarredFiles.Any() ? new String[0] : new[] {picasaIniPath}.Concat(existingStarredFiles);
-            }
-            catch (Exception e)
-            {
-                Console.Error.WriteLine("Failed to parse {0}: {1}", picasaIniPath, e);
-                return new string[0];
-            }
-        }
-
-        private static bool IsStarred(string sec, IniParser parsedIni)
-        {
-            var starValue = parsedIni.TryGetSetting(sec, "star");
-            return starValue != null && starValue.Equals("yes", StringComparison.InvariantCultureIgnoreCase);
-        }
-
-        public static IObservable<string> ToObservableSimple(this FileSystemWatcher src)
-        {
-            var sources = new[] 
-                    { 
-                        Observable.FromEvent<FileSystemEventHandler, FileSystemEventArgs>( handler => (sender, e) => handler(e), eh => src.Deleted += eh,  eh => src.Deleted -= eh ),
-                        Observable.FromEvent<FileSystemEventHandler, FileSystemEventArgs>( handler => (sender, e) => handler(e), eh => src.Created += eh,  eh => src.Created -= eh ),
-                        Observable.FromEvent<FileSystemEventHandler, FileSystemEventArgs>( handler => (sender, e) => handler(e), eh => src.Changed += eh,  eh => src.Changed -= eh ),
-                    };
-            return sources.Merge().Select(ev => ev.FullPath);
-        }
-
-        public static IObservable<string> ObserveFileSystem( this string srcDir, string filter)
-        {
-            return Observable.Create<string>(
-                subscriber =>
-                {
-                    var fsm = new FileSystemWatcher
-                    {
-                        Filter = filter,
-                        Path = srcDir,
-                        IncludeSubdirectories = true
-                    };
-                    fsm.ToObservableSimple().Subscribe(subscriber);
-                    fsm.EnableRaisingEvents = true;
-                    return fsm;
-                });
-        }
-
-        public static IObservable<T> ThrottlePerValue<T>(this IObservable<T> src, TimeSpan throttleValue)
-        {
-            return src.GroupBy(_ => _).SelectMany(gr => gr.Throttle(throttleValue));
-        }
-
-        public static IObservable<T> Prefix<T>(this IObservable<T> src, T firstValue)
-        {
-            return new[] {firstValue}.ToObservable().Concat(src);
-        }
-    }
-
     class Program
     {
         private static void Main(string[] args)
         {
-            var srcDir = @"D:\Fotos\";
-            var videoDestDir = @"D:\FotoMirrors\Videos\";
-            var starredDestDir = @"D:\FotoMirrors\Starred\";
+        var srcDir = @"D:\Fotos";
+            var videoDestDir = @"D:\FotoMirrors\Videos";
+            var starredDestDir = @"D:\FotoMirrors\Starred";
+            var starredDestDir2 = @"I:\FotoMirrors\Starred";
+            var personDestDir = @"D:\FotoMirrors\People";
+
+            var persons = new[]
+            {
+                "Sjoerd de Boer",
+                "Pieter de Boer",
+                "Simon de Boer",
+                "Mathijs de Boer",
+                "Bart de Boer",
+                "Maaike de Boer",
+                "Anne-Riet de Boer",
+                "Victoria Flutur",
+                "Liviu Flutur",
+                "Michaela Flutur",
+                "Lorelei de Boer",
+                "Sebbe de Boer",
+                "Sophie de Boer",
+                "Laura Candidatu",
+                "Bogdan Flutur",
+            }.ToObservable();
+
+            var personData =
+                persons.Select(
+                    n => new {Name = n, Person = PicasaPerson.TryGetPerson(n), Path = Path.Combine(personDestDir, n)})
+                    .Where(set => set.Person != null);
 
             var videoObservable = srcDir.ObserveFileSystem("*.M4V")
                 .Select(Path.GetDirectoryName)
-                .ThrottlePerValue(TimeSpan.FromSeconds(5)).Prefix(srcDir);
+                .ThrottlePerValue(TimeSpan.FromSeconds(15))
+                .StartWith(srcDir);
 
-            var starObservable = srcDir.ObserveFileSystem(".picasa.ini")
+            var picasaObservable = srcDir.ObserveFileSystem(".picasa.ini")
                 .Select(Path.GetDirectoryName)
-                .ThrottlePerValue(TimeSpan.FromSeconds(5)).Prefix(srcDir);
+                .ThrottlePerValue(TimeSpan.FromSeconds(15))
+                .StartWith(srcDir).Publish();
+
+            var personDisposable = new CompositeDisposable();
+            personDisposable.Add(personData.Subscribe(
+                on => personDisposable.Add(picasaObservable.Subscribe(
+                    pad =>
+                        UpdateMirror(ini => ini.GetFilesWithPerson(on.Person), pad, on.Path, srcDir)))));
 
             using (
                 videoObservable.Subscribe(
-                    pad => UpdateMirror(CollectVideoCandidates, pad, pad.Replace(srcDir, videoDestDir))))
+                    pad => UpdateMirror(CollectVideoCandidates, pad, videoDestDir, srcDir)))
             using (
-                starObservable.Subscribe(
-                    pad => UpdateMirror(CollectStarredCandidates, pad, pad.Replace(srcDir, starredDestDir))))
+                picasaObservable.Subscribe(
+                    pad => UpdateMirror(CollectStarredCandidates, pad, starredDestDir, srcDir)))
+            using (
+                picasaObservable.Subscribe(
+                    pad => UpdateMirror(CollectStarredCandidates, pad, starredDestDir2, srcDir)))
+            using (personDisposable)
+            using (picasaObservable.Connect())
             {
                 while (!Console.KeyAvailable)
                     Thread.Sleep(100);
             }
         }
 
+        private static string GetRelativeMirrorPath_YearMonth(string srcFullPath, string srcRelDir)
+        {
+            var fileTime = GetFileYearMonth(srcFullPath);
+            var dir = string.Format(@"{0:yyyy}\{0:yyyyMM - MMMM yyyy}", fileTime);
+            return Path.Combine(dir, Path.GetFileName(srcRelDir));
+        }
+
+        private static DateTime GetFileYearMonth(string pad)
+        {
+            var fileName = Path.GetFileName(pad);
+            try
+            {
+                var year = int.Parse(fileName.Substring(0, 4));
+                var month = int.Parse(fileName.Substring(4, 2));
+                if (year >= 1900 && year < 2100 && month >= 1 && month <= 12)
+                    return new DateTime(year, month, 1);
+            }
+            catch
+            {
+            }
+            try
+            {
+                return new FileInfo(pad).LastWriteTime;
+            }
+            catch
+            {
+                return new DateTime(1950, 1, 1);
+            }
+        }
+
         private static IEnumerable<string> CollectVideoCandidates(string dir)
         {
-            return dir.EnumerateFiles(new[] {@"*.M4V"}, SearchOption.AllDirectories).WithThumbnails();
+            try
+            {
+                return dir.EnumerateFiles(new[] {@"*.M4V"}, SearchOption.AllDirectories).WithThumbnails();
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine("Error in CollectVideoCandidates: {0}", e.Message);
+                return new String[0];
+            }
         }
 
         private static IEnumerable<string> CollectStarredCandidates(string dir)
         {
-            return dir.GetStarredFiles();
+            return dir.GetStarredFiles().WithThumbnails();
         }
 
         private static void UpdateMirror(Func<string, IEnumerable<string>> srcToIncludeListFunc, string srcDir,
-            string destDir)
+            string destDir, string srcRoot)
         {
-            UpdateMirror(srcToIncludeListFunc(srcDir), srcDir, destDir);
+            UpdateMirror(srcToIncludeListFunc(srcDir), srcDir, destDir, srcRoot);
         }
 
-        private static void UpdateMirror(IEnumerable<string> mp4PathsWithThms, string srcDir, string destDir)
+        private static void UpdateMirror(IEnumerable<string> mp4PathsWithThms, string srcDir, string destRoot, string srcRoot)
         {
+            if (!srcRoot.EndsWith(Path.DirectorySeparatorChar.ToString(CultureInfo.InvariantCulture)))
+                srcRoot += Path.DirectorySeparatorChar;
             if (!srcDir.EndsWith(Path.DirectorySeparatorChar.ToString(CultureInfo.InvariantCulture)))
                 srcDir += Path.DirectorySeparatorChar;
-            if (!destDir.EndsWith(Path.DirectorySeparatorChar.ToString(CultureInfo.InvariantCulture)))
-                destDir += Path.DirectorySeparatorChar;
+
+            bool doDelete = srcRoot.Equals(srcDir, StringComparison.InvariantCultureIgnoreCase);
+
+            if (!destRoot.EndsWith(Path.DirectorySeparatorChar.ToString(CultureInfo.InvariantCulture)))
+                destRoot += Path.DirectorySeparatorChar;
 
             var relativePaths = mp4PathsWithThms.Select(path => path.Substring(srcDir.Length));
-            var existingRelativePaths = new HashSet<string>();
-            foreach (var relPath in relativePaths)
+            var triplets = relativePaths.Select(
+                relPath =>
+                    new
+                    {
+                        RelSrc = relPath,
+                        FullSrc = Path.Combine(srcDir, relPath),
+                        RelDst = GetRelativeMirrorPath_YearMonth(Path.Combine(srcDir, relPath), relPath)
+                    }).ToArray();
+
+            var relativePathThatShouldExistInDestination = new HashSet<string>(triplets.Select(tr => tr.RelDst.ToLowerInvariant()));
+
+            foreach (var trip in triplets)
             {
-                existingRelativePaths.Add(relPath.ToLowerInvariant());
-                var srcPath = Path.Combine(srcDir, relPath);
-                var dstPath = Path.Combine(destDir, relPath);
-                HardlinkIfNotExists(srcPath, dstPath);
+                var dstPath = Path.Combine(destRoot, trip.RelDst);
+                HardlinkIfNotExists(trip.FullSrc, dstPath);
             }
 
-            var existingFilesInTarget = IoHelpers.EnumerateFilesIfDirExists(destDir, "*.*", SearchOption.AllDirectories);
-
-            var relativeLowerCaseExistinFilesInTarget =
-                existingFilesInTarget.Select(path => path.Substring(destDir.Length).ToLowerInvariant());
-            var surplusRelativeFiles =
-                relativeLowerCaseExistinFilesInTarget.Where(relPath => !existingRelativePaths.Contains(relPath));
-            foreach (var relPathToDelete in surplusRelativeFiles)
+            if (doDelete)
             {
-                var fullPathToDelete = Path.Combine(destDir, relPathToDelete);
-                fullPathToDelete.DeleteFile();
-                Console.WriteLine("Deleted {0}", fullPathToDelete);
+                var existingFilesInTarget = IoHelpers.EnumerateFilesIfDirExists(destRoot, "*.*",
+                    SearchOption.AllDirectories);
+
+                var relativeLowerCaseExistinFilesInTarget =
+                    existingFilesInTarget.Select(path => path.Substring(destRoot.Length).ToLowerInvariant());
+                var surplusRelativeFiles =
+                    relativeLowerCaseExistinFilesInTarget.Except(relativePathThatShouldExistInDestination);
+
+                foreach (var relPathToDelete in surplusRelativeFiles)
+                {
+                    var fullPathToDelete = Path.Combine(destRoot, relPathToDelete);
+                    TryDeleteFile(fullPathToDelete);
+                }
             }
-            foreach (var dir in Directory.EnumerateDirectories(destDir, "*.*", SearchOption.AllDirectories))
+
+            foreach (var dir in IoHelpers.EnumerateFilesIfDirExists(destRoot, "*.*", SearchOption.AllDirectories))
             {
                 if (dir.TryDeleteDirectoryAndParents())
                     Console.WriteLine("Deleted directory {0}", dir);
+            }
+        }
+
+        private static void TryDeleteFile(string fullPathToDelete)
+        {
+            try
+            {
+                fullPathToDelete.DeleteFile();
+                Console.WriteLine("Deleted {0}", fullPathToDelete);
+            }
+            catch (Exception e)
+            {
+                Console.Error.WriteLine("Error deleting {0}: {1}", fullPathToDelete, e.Message);
             }
         }
 
@@ -200,6 +208,8 @@ namespace SmartMirror
             }
             if (srcPath.TryHardLinkFile(dstPath))
                 Console.WriteLine("Created {0}", dstPath);
+            else if (srcPath.TryCopyFile(dstPath))
+                Console.WriteLine("Copied {0}", dstPath);
             else
                 Console.WriteLine("Could not create {0}", dstPath);
         }

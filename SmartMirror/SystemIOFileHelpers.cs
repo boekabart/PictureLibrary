@@ -303,6 +303,20 @@ namespace SmartMirror
             return true;
         }
 
+        public static bool TryCopyFile(this string filePath, string targetPath)
+        {
+            try
+            {
+                targetPath.GetDirectoryName().CreateDirectory();
+                File.Copy(filePath, targetPath);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         public static void AssertExists(this string filePath)
         {
             if (!filePath.FileExists())
