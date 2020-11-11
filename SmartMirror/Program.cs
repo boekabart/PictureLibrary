@@ -19,7 +19,6 @@ namespace SmartMirror
         var srcDir = @"D:\Fotos";
             var videoDestDir = @"D:\FotoMirrors\Videos";
             var starredDestDir = @"D:\FotoMirrors\Starred";
-            var starredDestDir2 = @"I:\FotoMirrors\Starred";
             var personDestDir = @"D:\FotoMirrors\People";
 
             var persons = new[]
@@ -69,9 +68,6 @@ namespace SmartMirror
             using (
                 picasaObservable.Subscribe(
                     pad => UpdateMirror(CollectStarredCandidates, pad, starredDestDir, srcDir)))
-            using (
-                picasaObservable.Subscribe(
-                    pad => UpdateMirror(CollectStarredCandidates, pad, starredDestDir2, srcDir)))
             using (personDisposable)
             using (picasaObservable.Connect())
             {
