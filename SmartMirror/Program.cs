@@ -13,6 +13,7 @@ namespace SmartMirror
 {
     class Program
     {
+        private static readonly string[] videoAndThumbnailExtensions = new [] {"*.M4V", "*.MP4", "*.THM", "*.MOV", "*.THV"};
         private static void Main(string[] args)
         {
         var srcDir = @"D:\Fotos";
@@ -46,7 +47,7 @@ namespace SmartMirror
                     n => new {Name = n, Person = PicasaPerson.TryGetPerson(n), Path = Path.Combine(personDestDir, n)})
                     .Where(set => set.Person != null);
 
-            var videoObservable = srcDir.ObserveFileSystem("*.M4V")
+            var videoObservable = srcDir.ObserveFileSystem(videoAndThumbnailExtensions)
                 .Select(Path.GetDirectoryName)
                 .ThrottlePerValue(TimeSpan.FromSeconds(15))
                 .StartWith(srcDir);
@@ -113,7 +114,7 @@ namespace SmartMirror
         {
             try
             {
-                return dir.EnumerateFiles(new[] {@"*.M4V"}, SearchOption.AllDirectories).WithThumbnails();
+                return dir.EnumerateFiles(videoAndThumbnailExtensions, SearchOption.AllDirectories);
             }
             catch (Exception e)
             {
