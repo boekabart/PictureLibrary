@@ -38,6 +38,7 @@ namespace SmartMirror
                 "Sophie de Boer",
                 "Laura Candidatu",
                 "Bogdan Flutur",
+                "Célestine de Boer"
             }.ToObservable();
 
             var personData =
