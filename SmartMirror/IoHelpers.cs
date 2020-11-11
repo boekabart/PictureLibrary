@@ -134,17 +134,18 @@ namespace SmartMirror
             return sources.Merge().Select(ev => ev.FullPath);
         }
 
-        public static IObservable<string> ObserveFileSystem( this string srcDir, string filter)
+        public static IObservable<string> ObserveFileSystem( this string srcDir, params string[] filters)
         {
             return Observable.Create<string>(
                 subscriber =>
                 {
                     var fsm = new FileSystemWatcher
                     {
-                        Filter = filter,
                         Path = srcDir,
                         IncludeSubdirectories = true
                     };
+                    foreach ( var filter in filters)
+                        fsm.Filters.Add(filter);
                     fsm.EnableRaisingEvents = true;
                     return new CompositeDisposable(fsm, fsm.ToObservableSimple().Subscribe(subscriber));
                 });
